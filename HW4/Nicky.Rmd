@@ -1,0 +1,278 @@
+---
+title: "Assignment 4"
+author: "NickyNie"
+date: "4/2/2022"
+output:
+  - github_document
+  - html_document
+  - pdf_document
+always_allow_html: True
+---
+
+### Conceptual
+The goal of this exercise is to illustrate the grouping properties of Ridge and Elastic-net compared to Lasso
+Compute the full path for of solutions the Lasso, Ridge and elastic net on the data generated below using `glmnet` to generate a full path of solutions:
+
+```{r} 
+library(glmnet)
+# Simulates Features
+n = 50
+x1 = rnorm(n)
+x2 = x1
+x3 = rnorm(n)
+X = cbind(x1, x2, x3)
+# Simulates error/noise
+e = rnorm(n, sd = 0.1)
+#Simulates outcome y
+y = 1 + 2*x1 + e
+```
+
+```{r}
+lambda_grid = 10^seq(2,-2,length=50)
+model_ridge = glmnet(X, y, family='gaussian', alpha=0, standardize=TRUE, lambda=lambda_grid)
+model_ridge_coefs = coef(model_ridge)
+round(model_ridge_coefs[, 43:50], 2)
+```
+
+```{r}
+model_lasso = glmnet(X, y, family = "gaussian", alpha = 1)
+model_lasso_coefs = coef(model_lasso)
+round(model_lasso_coefs[, 43:50], 2)
+```
+
+```{r}
+model_enet = glmnet(X, y, family = "gaussian", alpha = 0.5)
+model_enet_coefs = coef(model_enet)
+round(model_enet_coefs[, 43:50], 2)
+```
+
+Comment on your results regarding grouping effects of the estimated coefficients.
+
+Ridge regression use all features to represent the group.
+
+The outcome y is highly related with x1, so Lasso tends to select one feature(x1) to represent the group.
+
+But for elastic net regression, it tends to select the entire group and ‘spreads’ the effect assigning similarly estimated coefficients (x1 and x2) across the features in the group.
+
+### Analysis
+
+#### Exercise 1
+You will build a model to predict psa levels using PCA linear regression using the PSA prostate data
+
+i. Load the mlr3 library and the prostate data
+```{r}
+library(mlr3)
+library(mlr3verse)
+# read in data
+prostate <- read.csv("prostate.csv")
+```
+
+ii. Specify the regression task and the base linear regression learner. Note: we will not split the data into training and testing because of the modest sample size. Explain whether this invalidates any prediction model we develop and why in practice we always want a test set.
+
+```{r}
+# create PSA task
+psa.tsk <- as_task_regr(prostate, target = "lpsa", id = "PSA Prediction") 
+# create basic linear regression learner
+lm.lrn <- lrn("regr.lm")
+```
+
+It does not invalidate the PCA since PCA is unsupervised, but it may invalidate linear regression model since no test set will result in an overfitting problem, which can not be generalized to other datasets in practice.
+
+iii. Create a new learner adding a PCA preprocessing step to the base learner. In ``mlr3`` parlance this is called a pipeline operator, ``%>>%``. This becomes a new 'composite' learner that can be used just like any of the standard learners we used before. In particular if K-fold CV is used, both the PCA and the linear regression will be used for training on each set of K-1 folds and prediction on the K-th fold. 
+
+```{r}
+library(mlr3pipelines)
+# create PCA step
+pca <- po("pca")
+# combines linear regression and PCA into a single learner
+pca_lm.lrn <- pca %>>% lm.lrn
+```
+
+iv. Rather than fixing it as in the lecture, we will treat the number of principal components  ``pca.rank.`` as a tuning parameter. Specify ``pca.rank.`` as a an integer tuning parameter ranging from 1 to the number of features in the PSA data
+
+
+```{r}
+ps <- ps(pca.rank. = p_int(lower = 1, length(psa.tsk$feature_names)))
+```
+
+v. Create a control object for hyperparameter tuning with grid search.
+
+```{r}
+ctrl <- tnr("grid_search", resolution = 8) 
+# resolution is the number of points in the grid of values for the tuning parameter. Since there are 8 possible PCs we want resolution = 8 
+```
+
+vi. Perform the tuning
+
+```{r}
+set.seed(202)
+# resampling method
+cv5 <- rsmp("cv", folds = 5)
+# create the autotuner
+pca_lm.lrn = AutoTuner$new(
+  learner = pca_lm.lrn,
+  resampling = cv5,
+  measure = msr("regr.rsq"),
+  search_space = ps,
+  terminator = trm("evals", n_evals = 10), # stop after 10 iterations
+  tuner = ctrl
+)
+# complete the tuning
+lgr::get_logger("mlr3")$set_threshold("warn")
+pca_lm.lrn$train(psa.tsk)
+```
+
+vii. How many principal components are selected? Does preprocessing by PCA help in this case? 
+
+8 principal components, preprocessing by PCA doesn't help since originally it has 8 PCs, no PCs are dropped.
+
+viii. Use now benchmark to automate the comparison between PCA regression and standard linear regression on the prostate data
+
+```{r}
+set.seed(101)
+design = design = benchmark_grid(
+  tasks = psa.tsk,
+  learners = list(lm.lrn, pca_lm.lrn),
+  resampling = rsmp("cv", folds = 5)
+)
+psa_benchmark = benchmark(design)
+```
+```{r}
+psa_benchmark$aggregate(msr('regr.rsq'))
+```
+
+Still no obvious improvement for including PCA preprocessing in the prediction model.
+
+#### Exercise 2
+You will build a classifier to predict cancer specific death among breast cancer patients within 5-year of diagnosis based on a subset of 1,000 gene expression features from the Metabric data using ridge, lasso and elastic net logistic regression. (The metabric data contains close to 30,000 gene expression features, here we use a subset to keep computation times reasonable for this in class Lab. In the homework version you will use the full feature set)
+
+i. Load the Metabric data
+
+```{r}
+load('metabric.Rdata') 
+```
+
+ii. Check the dimension of the metabric dataframe using ``dim`` check the number of deaths using ``table`` on the binary outcome variable
+
+```{r}
+# check dimensions
+cat("Dataset Dimensions: \n"); dim(metabric)
+# make sure to factor outcome variable
+metabric$y <- factor(metabric$y, labels=c("survive", "die"))
+# check number of deaths
+cat("Number of deaths: \n"); table(metabric$y)
+```
+
+
+iii. Create an appropriate mlr3 task
+
+```{r}
+metabric.tsk <- as_task_classif(metabric, target = "y", id = "One-year Breast Cancer Mortality")
+```
+
+
+iv. Split the data into training (70%) and test (30%)
+```{r}
+set.seed(123)
+# specify resampling to have 70/30 training/testing split
+holdout.desc <- rsmp("holdout", ratio = 0.7)
+# instantiate split
+holdout.desc$instantiate(metabric.tsk)
+# extract training and testing sets
+train <- holdout.desc$train_set(1)
+test  <- holdout.desc$test_set(1)
+```
+
+v. Create lasso, ridge, and Elastic net learners using "classif.cv_glmnet" (Recall that by specifying ``cv.glmnet`` as the learner, k-fold (10-fold by default) will be automatically used to tune the lambda penalty parameter. This takes advantage of the fast implementation of cross-validation within the ``glmnet`` package rather than cross-validating using ``mlr3`` tools).
+
+```{r}
+# LASSO
+lasso.lrn <- lrn("classif.cv_glmnet", 
+                  alpha = 1, 
+                  type.measure = "auc") 
+lasso.lrn$predict_type <- "prob"
+# ridge
+ridge.lrn <- lrn("classif.cv_glmnet",
+                 alpha=0, standardize=TRUE, lambda=lambda_grid,
+                 type.measure = "auc")
+ridge.lrn$predict_type <- "prob"
+#Elastic net
+enet.lrn <- lrn("classif.cv_glmnet",
+                  alpha = 0.5,
+                type.measure = "auc")
+enet.lrn$predict_type <- "prob"
+```
+
+
+vi. Train the models on the training data using CV with an appropriate performance measure (hint: you can check the available measures for your task using ``listMeasures``). Extract the cross-validated measure of performance. Why is the CV measure of performance the relevant metric to compare models? 
+
+```{r}
+# LASSO
+lasso.lrn$train(metabric.tsk, row_ids=train)
+lasso.lrn$model
+cat("LASSO cross-validated AUC:");max(lasso.lrn$model$cvm)
+# Ridge
+ridge.lrn$train(metabric.tsk, row_ids=train)
+ridge.lrn$model
+cat("Ridge cross-validated AUC:");max(ridge.lrn$model$cvm)
+# Elastic net
+enet.lrn$train(metabric.tsk, row_ids=train)
+enet.lrn$model
+cat("Elastic net cross-validated AUC:");max(enet.lrn$model$cvm)
+```
+
+Because simple validation only use part of data for training and the performance of model highly depends on how you split the data, cross validation provide a more convincing aspect of how well the prediction model can be generalized on other data and also compared to other models considered.
+
+vii. Which method performs best? What does this say about the likely nature of the true relationship between the expression features and the outcome?
+
+Ridge regression performs best. The expression features are not highly correlated with each other and all expression features will affect the outcome.
+
+viii. Report an 'honest' estimate of prediction performance, plot the ROC curve.
+
+```{r}
+#Fill in the ...
+preds <- ridge.lrn$predict(metabric.tsk)
+autoplot(preds, type= 'roc')
+```
+
+
+ix. Re-train the best performing method on all the data (training and test). This is the final model you would use to predict death in new women just diagnosed and treated for breast cancer. Why is this ok and why is this better than simply using the model trained on just the training data? 
+
+```{r}
+#Fill in the ...
+metabric_final = ridge.lrn$train(metabric.tsk)
+preds_final <- ridge.lrn$predict(metabric.tsk)
+head(preds_final$prob)
+hist(preds_final$prob[,1])
+p0.5 = median(preds_final$prob[,1])  # median predicted probability
+preds_final$set_threshold(p0.5) # change prediction cutoff 
+preds_final$confusion
+autoplot(preds_final, type= 'roc')
+```
+
+Because cross validation already make sure that this model is best prediction model for generalized data among all the three models, and more data for training will improve the prediction performance of the model with lower bias.
+
+
+x. The dataset ``new_expression_profiles`` contains the gene expression levels for 15 women newly diagnosed with breast cancer. Estimate their one-year survival probabilities using the selected model.
+
+```{r}
+# read in data
+new_expression_profiles <- read.csv("new_expression_profiles.csv", header=T)
+# predict in new data
+predict_new <- metabric_final$predict_newdata(new_expression_profiles)
+predict_new$prob
+predict_new$response
+```
+
+xi. Redo the model comparison between lasso, ridge, elastic net using mlr3's `benchmark` function rather than manually 
+```{r}
+set.seed(101)
+design = design = benchmark_grid(
+    tasks = metabric.tsk,
+    learners = list(ridge.lrn, lasso.lrn, enet.lrn),
+    resampling = rsmp("cv", folds = 5)
+)
+metabric_benchmark = benchmark(design)
+metabric_benchmark$aggregate(msr('classif.auc'))
+```
+

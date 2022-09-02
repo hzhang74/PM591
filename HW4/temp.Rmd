@@ -1,0 +1,37 @@
+---
+title: "PM 591 -- Machine Learning for the Health Sciences."
+author: "Haoran Zhang"
+date: "Due 4/4/2022"
+output: pdf_document
+html_document: default
+---
+
+### Conceptual
+The goal of this exercise is to illustrate the grouping properties of Ridge and Elastic-net compared to Lasso
+Compute the full path for of solutions the Lasso, Ridge and elastic net on the data generated below using `glmnet` to generate a full path of solutions:
+
+```{r, warning=FALSE, message=FALSE}
+library(glmnet)
+# Simulates Features
+set.seed(520)
+
+n = 50
+x1 = rnorm(n)
+x2 = x1
+x3 = rnorm(n)
+X = cbind(x1, x2, x3)
+
+# Simulates error/noise
+e = rnorm(n, sd = 0.1)
+
+#Simulates outcome y
+y = 1 + 2*x1 + e
+```
+
+
+```{r ridge}
+lambda_grid = 10^seq(2,-2,length=n)
+ridge = glmnet(X, y, family='gaussian', alpha=0, standardize=TRUE, lambda=lambda_grid)
+ridge_coef = coef(ridge)
+round(ridge_coef[, 42:50], 2)
+```
