@@ -1,0 +1,119 @@
+---
+title: "Classification and Regression Trees"
+output:
+  html_document:
+    df_print: paged
+---
+Learning objectives.
+
+- Perform classification and regression with tree-based methods in R
+- Recognize that tree-based methods are capable of capturing non-linearities by splitting multiple times on the same variable
+
+### Analysis/conceptual
+You will assess how well a tree model can capture non-linearities by fitting a regression tree to simulated non-linear data.
+
+i. Simulate the data
+
+```{r, eval=FALSE}
+set.seed(1984) 
+n = 1000
+x = runif(n, -5, 5) # n observations uniformly distributed in the interval -5 to 5
+error = rnorm(n, sd=0.5)
+y = sin(x) + error # nonlinear relationship between outcome y and feature x
+nonlin = data.frame(y=y, x=x)
+```
+
+ii. Split the data into training and testing (500 observations in each). Plot the data -- scatterplot of y vs. x
+
+iii. Fit a regression tree using the training set 
+
+```{r, eval=FALSE}
+library(rpart)
+treefit = rpart(y~x, method='anova', control=list(cp=0), data=nonlin[train,]) # Method='anova' indicates regression tree. cp=0 ensures that binary recursive partitioning will not stop early due to lack of improvement in RSS by an amount of at least cp
+```
+
+iv. Plot the fitted regression tree
+
+```{r, eval=FALSE}
+plot(treefit) # plots the tree
+text(treefit) # annotates the tree. May fail if tree is too large
+
+library(rattle)
+fancyRpartPlot(treefit) #the function fancyRpartPlot in package rattle draws good looking trees!
+```
+
+v. Plot the cv relative error to determine the optimal complexity parameter
+
+```{r, eval=FALSE}
+plotcp(treefit)
+```
+
+vi. Print the table complexity parameter values and their associated cv-errors
+
+```{r, eval=FALSE}
+printcp(treefit)
+```
+
+vii. Select the optimal complexity parameter and prune the tree
+
+```{r, eval=FALSE}
+optimalcp =  # for you to fill in
+treepruned = prune(treefit, cp=optimalcp)
+```
+
+viii. Plot the pruned tree
+
+ix. Summarize the pruned tree object and relate the summary to the plotted tree above
+
+```{r, eval=FALSE}
+summary(treepruned)
+```
+
+x. Based on the plot and/or summary of the pruned tree create a vector of the (ordered) split points for variable x, and a vector of fitted values for the intervals determined by the split points of x.
+
+```{r, eval=FALSE}
+x_splits = c() # for you to fill in
+y_splits = c() # for you to fill in
+```
+
+xi. Plot the step function corresponding to the fitted (pruned) tree
+
+```{r, eval=FALSE}
+plot(y~x, data=nonlin[train,])
+stpfn = stepfun(x_splits, y_splits) #stepfun creates the step function 
+plot(stpfn, add=TRUE, lwd=2, col='red4') #add=TRUE plots over the existing plot 
+```
+
+xii. Fit a linear model to the training data and plot the regression line. Contrast the quality of the fit of the tree model vs. linear regression by inspection of the plot
+
+```{r, eval=FALSE}
+lmfit = lm(y ~ x, data=nonlin[train,])
+summary(lmfit)
+abline(lmfit, col='blue', lwd=2)
+```
+ 
+xiii. Compute the test MSE of the pruned tree and the linear regression model
+
+
+### Analysis
+You will recreate the analysis of the heart data in the textbook and lecture. 
+
+i.   Split the data into training and testing
+
+ii.  Fit a classification tree using ``rpart``
+
+iii. Plot the unpruned tree
+
+iv.  Plot the cv error
+
+v. Prune the tree using the optimal complexity parameter
+
+vi. Plot the pruned tree
+
+vii. Compute the test misclassification error
+
+vii. Fit the tree with the optimal complexity parameter to the full data (training + testing)
+
+
+
+

@@ -1,0 +1,291 @@
+---
+title: "Support vector machines"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+Learning objective: Train and tune support machines using ``mlR``
+
+### Analysis
+#### Exercise 1
+In this exercise you will reproduce the comparison described in the textbook of support vector machines with different kernels on the heart data.
+
+i. You will first tune an svm with a radial basis function (RBF) kernel with respect to its two parameters $\,cost$ and $\,\sigma$
+
+```{r,}
+require(mlr3)
+require(mlr3verse)
+
+set.seed(2021)
+lgr::get_logger("mlr3")$set_threshold("warn")
+lgr::get_logger("bbotk")$set_threshold("warn")
+
+# read in data
+setwd("...")
+
+heart           <- read.csv('Heart.csv')
+heart           <- heart[complete.cases(heart), ]  #No missing values allowed for SVM
+heart$AHD       <- factor(heart$AHD)
+heart$Thal      <- factor(heart$Thal)
+heart$Thal      <- as.numeric(heart$Thal)
+heart$ChestPain <- factor(heart$ChestPain)
+heart$ChestPain <- as.numeric(heart$ChestPain)
+
+# create classification task
+heart.tsk <- as_task_classif(heart, target = "AHD", id = "Heart Disease")
+
+# 70/30 training testing split, ensuring appropriate case/control ratios
+holdout.desc <- rsmp("holdout", ratio = 0.7)
+heart.tsk$col_roles$stratum <- heart.tsk$target_names
+holdout.desc$instantiate(heart.tsk)
+
+# extract training and testing sets
+train <- holdout.desc$train_set(1)
+test  <- holdout.desc$test_set(1)
+intersect(train, test) # check that the train and test set are unique
+
+# create SVM learner, making sure to include the type
+rbfsvm.lrn  <- lrn("classif.svm", kernel = "radial", type = "C-classification")
+rbfsvm.lrn$predict_type <- "prob"
+
+# Notice the "prob" argument requiring class probabilities are returned
+# How is that possible if SVMs are 0-1 classifiers??
+# SVMs are indeed 0-1 classifiers but they can be made to estimate class probabilities 
+# based on the distance to the classification hyperplane: 
+# (the further away the more confident about the classification to the corresponding class)
+
+# create parameter space to search and define resolution
+ps    <- ps(cost = p_dbl(lower=0.1, upper=10),
+         gamma = p_int(lower=0, upper=5))
+tuner <- tnr("grid_search", resolution = 5)
+
+# create the autotuner
+heart.at = AutoTuner$new(
+  learner = rbfsvm.lrn,
+  resampling = rsmp("cv", folds=5), # 5-fold CV seems reasonable given the size of the training data
+  measure = msr("classif.auc"),
+  search_space = ps,
+  terminator = trm("none"), # search the entire parameter grid
+  tuner = tuner
+)
+
+# tune and print results
+heart.at$train(heart.tsk, row_ids = train)
+heart.at$tuning_result 
+```
+
+ii. Retrain on the training set using a) the optimal set of parameters (best CV AUC) and b) the set of parameters with the worst CV AUC. Predict on the test set using both sets of parameters, plot the corresponding test ROC curves, and compute the test AUCs. (hint: remember the ``MLR3`` function ``autoplot``.) Based on these results, did parameter tuning make a big difference in performance in this?
+
+```{r}
+require(mlr3viz)
+require(GGally)
+require(precrec)
+
+set.seed(2021)
+lgr::get_logger("mlr3")$set_threshold("warn")
+lgr::get_logger("bbotk")$set_threshold("warn")
+
+### optimal parameters
+# create learner using optimal params from tuning
+best_learner <- lrn("classif.svm", 
+               kernel="radial", type="C-classification",
+               cost = heart.at$tuning_result$cost,
+               gamma = heart.at$tuning_result$gamma)
+best_learner$predict_type <- "prob"
+
+# train tuner and predict
+best_learner$train(heart.tsk, row_ids = train)
+best_pred <- best_learner$predict(heart.tsk, row_ids = test)
+best_pred$confusion
+
+# plot ROC
+autoplot(best_pred, type="roc")
+best_pred$score()
+
+### worst parameters
+# pull out worst parameters
+tuning_params <- as.data.table(heart.at$archive)[, c("cost", "gamma", "classif.auc")]
+worst_params <- tuning_params[which.min(tuning_params$classif.auc), ]
+
+# create learner using worst params from tuning
+worst_learner <- lrn("classif.svm", 
+               kernel="radial", type="C-classification",
+               cost = worst_params$cost,
+               gamma = worst_params$gamma)
+worst_learner$predict_type <- "prob"
+
+# train tuner and predict
+worst_learner$train(heart.tsk, row_ids = train)
+worst_pred <- worst_learner$predict(heart.tsk, row_ids = test)
+worst_pred$confusion
+
+# plot ROC
+autoplot(worst_pred, type="roc")
+worst_pred$score()
+```
+
+
+iii. Retrain on the full dataset (using the optimal parameter set only)
+
+```{r}
+best_learner$train(heart.tsk)
+```
+
+
+iv. The code below extends the comparison above to include both and RBF, a polynomial kernel, and the linear kernel (i.e. support vector classifier). Now, RBF, the linear and the polynomial kernels share the cost parameter $\,cost$ but also have additional non-shared tuning parameters (the polynomial degree $\,degree$ is a tuning parameter only for polynomial kernels and $\,sigma$ is a tuning parameter only for RBF kernels). The code below constructs a set of parameters that enables tuning both shared and non-shared parameters all at once! 
+
+
+Tune the svm learner using this extended set of parameters ``ps_extended``.
+
+
+```{r}
+set.seed(2021)
+lgr::get_logger("mlr3")$set_threshold("warn")
+lgr::get_logger("bbotk")$set_threshold("warn")
+
+ps_extended <- ps(kernel = p_fct(levels = c("linear", "polynomial", "radial")),
+         cost = p_dbl(lower=0.1, upper=5),
+         gamma = p_int(lower=0, upper=5, depends = quote(kernel == "radial")),
+         degree = p_int(lower=1, upper=5, depends = quote(kernel == "polynomial")))
+# Notice that the type of kernel itself is a tuning parameter in the specification above!!!
+
+# create the autotuner
+heart.at2 = AutoTuner$new(
+  learner = rbfsvm.lrn,
+  resampling = rsmp("cv", folds=5), # 5-fold CV seems reasonable given the size of the training data
+  measure = msr("classif.auc"),
+  search_space = ps_extended,
+  terminator = trm("none"), # search the entire parameter grid
+  tuner = tuner
+)
+
+# tune and print results
+heart.at2$train(heart.tsk, row_ids = train)
+heart.at2$tuning_result 
+```
+
+
+v. Explore a wider range of values for $\,cost$, $\,\sigma$ and $\,degree$ and repeat ii. and iii. Which kernel performed best? What may this say about the nature of the true decision boundary?
+
+ANSWER: Best learner is polynomial, meaning the true decision boundary is mostly likely polynomial in shape.
+
+```{r}
+set.seed(2021)
+lgr::get_logger("mlr3")$set_threshold("warn")
+lgr::get_logger("bbotk")$set_threshold("warn")
+
+# larger range for extended parameters
+ps_extended <- ps(kernel = p_fct(levels = c("linear", "polynomial", "radial")),
+         cost = p_dbl(lower=0.1, upper=10),
+         gamma = p_int(lower=0, upper=10, depends = quote(kernel == "radial")),
+         degree = p_int(lower=1, upper=10, depends = quote(kernel == "polynomial")))
+
+# create the autotuner
+heart.at2 = AutoTuner$new(
+  learner = rbfsvm.lrn,
+  resampling = rsmp("cv", folds=5), # 5-fold CV seems reasonable given the size of the training data
+  measure = msr("classif.auc"),
+  search_space = ps_extended,
+  terminator = trm("none"), # search the entire parameter grid
+  tuner = tuner
+)
+heart.at2$train(heart.tsk, row_ids = train)
+
+### optimal parameters
+# create learner using optimal params from tuning -- polynomial kernel
+heart.at2$tuning_result
+best_learner <- lrn("classif.svm", 
+               kernel="polynomial", type="C-classification",
+               cost = heart.at2$tuning_result$cost,
+               degree = heart.at2$tuning_result$degree)
+best_learner$predict_type <- "prob"
+
+# train tuner and predict
+best_learner$train(heart.tsk, row_ids = train)
+best_pred <- best_learner$predict(heart.tsk, row_ids = test)
+best_pred$confusion
+
+# plot ROC
+autoplot(best_pred, type="roc")
+best_pred$score()
+
+### worst parameters
+# pull out worst parameters
+tuning_params <- as.data.table(heart.at2$archive)[, c("kernel", "cost", "gamma", "degree", "classif.auc")]
+worst_params <- tuning_params[which.min(tuning_params$classif.auc), ]
+
+# create learner using worst params from tuning
+worst_params
+worst_learner <- lrn("classif.svm", 
+               kernel="radial", type="C-classification",
+               cost = worst_params$cost,
+               gamma = worst_params$gamma)
+worst_learner$predict_type <- "prob"
+
+# train tuner and predict
+worst_learner$train(heart.tsk, row_ids = train)
+worst_pred <- worst_learner$predict(heart.tsk, row_ids = test)
+worst_pred$confusion
+
+# plot ROC
+autoplot(worst_pred, type="roc")
+worst_pred$score()
+
+# train best learner on all data
+best_learner$train(heart.tsk)
+```
+
+
+
+#### Exercise 2
+Train svms on the metabric data following exercise in a similar way to 2. part iv. of Exercise 1. 
+
+```{r, cache=T}
+set.seed(2021)
+lgr::get_logger("mlr3")$set_threshold("warn")
+lgr::get_logger("bbotk")$set_threshold("warn")
+
+# read in data
+setwd("...")
+load('metabric.Rdata') 
+
+metabric$y <- factor(metabric$y)
+
+# create classification task
+
+
+# 70/30 training testing split, ensuring appropriate case/control ratios
+
+
+# extract training and testing sets
+
+# create the autotuner
+
+
+### optimal parameters
+# create learner using optimal params from tuning -- polynomial kernel
+
+
+# train tuner and predict
+
+
+# plot ROC
+
+
+### worst parameters
+# pull out worst parameters
+
+# create learner using worst params from tuning
+
+
+# train tuner and predict
+
+# plot ROC
+
+
+# train best learner on all data
+
+```
+
+
